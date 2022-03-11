@@ -1,0 +1,289 @@
+---
+title: 'AML vs NBM DEMirs'
+author: "Jenny Smith"
+date: "September 29, 2018"
+output: html_document
+---
+
+
+```{r setup}
+library(knitr)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),tidy=TRUE, fig.align='center', fig.height=5, fig.width=8)
+knitr::opts_knit$set(root.dir = '/fh/fast/meshinchi_s/workingDir/TARGET/AML_TARGET/RNA/miRNAseq/analysis/2018.09.26_AML_vs_NBM_DEMirs/')
+options(stringsAsFactors = FALSE)
+```
+
+
+```{r message = FALSE, warning=FALSE}
+library(stringr)
+library(magrittr)
+library(ggplot2)
+library(dplyr)
+library(tibble)
+library(tidyr)
+getwd()
+```
+
+
+
+```{r}
+source("~/scripts/miRNAseq_analysis/DifferentialExpression_miRNAseq_pipeline_07.24.18.r")
+```
+
+
+#Define Functions
+
+```{r}
+pheno_bars <- function(CDE,IDCol,cols){
+  #CDE is the clinical data frame with patietns as rows. 
+  #IDcol is the name of the column with patient USIs or COG#s
+  #cols are the colnames to be combined. 
+  
+  #NOTE: all the unlist() functions are because tibbles do not play nice with base R...
+  
+  replace_yes <- function(col,name){
+    name <-gsub(".RNASeqCalls|.positive.", "", name)
+    col <- ifelse(grepl("Yes", col, ignore.case = TRUE), name, col)
+    return(col)
+  }
+  
+  phenobar.df <- CDE %>%
+    select(IDCol,cols)
+  
+  if(length(cols) > 1){
+    phenobar.df <- bind_cols(phenobar.df, mapply(replace_yes, CDE[,cols], cols, SIMPLIFY = FALSE))
+  }else{
+    new <- data.frame(replace_yes(unlist(CDE[,cols]),cols)) %>% set_colnames(cols)
+    phenobar.df <- bind_cols(phenobar.df, new) #dplyr bind_cols throws error Error in cbind_all(x) : Argument 2 must have names??
+  }
+  
+  
+  p <- NULL
+  for (col in cols){p <- paste(p,unlist(phenobar.df[,paste0(col,1)]), sep="|")}
+  
+  
+  
+  phenobar <- p %>%
+    gsub("No|Unknown|\\|", "", .) %>%
+    gsub("^$", "OtherAML",.) %>%
+    gsub("^NBM.+", "NBM", .) %>% # for NBM as a  factor level. 
+    set_names(unlist(CDE[,IDCol]))
+  
+  
+  return(phenobar)
+  
+}
+```
+
+#Read in the Clinical Data
+
+```{r}
+CDE.1031 <- read.csv("~/reference_mapping-files/AAML1031_Target_CDEs_with_HiAR_and_PrimaryCyto_FinalFusionCalls_Presence_Absence.csv")
+
+
+CDE.1031$Group <- ifelse(grepl("^BM|^RO", CDE.1031$USI), "NBM","AML")
+CDE.1031 <- CDE.1031 %>%
+  filter(!is.na(USI)) %>%
+  set_rownames(.$USI)
+
+head(CDE.1031[,1:5])
+dim(CDE.1031) #1223  227
+```
+
+```{r}
+table(CDE.1031$Group)
+```
+
+```{r}
+CDE.1031.detail <- read.csv("~/reference_mapping-files/AAML1031_Target_CDEs_with_HiAR_and_PrimaryCyto_FinalFusionCalls_Detailed.csv")
+
+CDE.1031.detail$Group <- ifelse(grepl("^BM|^RO", CDE.1031.detail$USI), "NBM","AML")
+
+head(CDE.1031.detail[,1:5])
+```
+
+
+
+#Read in the Expression Data
+
+```{r}
+cts <- read.csv("/fh/fast/meshinchi_s/workingDir/TARGET/AML_TARGET/RNA/miRNAseq/level3/matureMiRNA/2017July_BCCA_1031_miRBase20_Illumina_data/TARGET_AML_AAML1031_expn_matrix_mimat_miRNA_rawCounts.csv", row.names = 1)
+
+#Remove the cell lines 
+cts <- cts[,-grep("Kas|MV4", colnames(cts))]
+colnames(cts) <- str_split_fixed(colnames(cts), "\\.", n=2)[,1]
+
+head(cts[,1:5])
+dim(cts)
+```
+
+
+#Run the Differential Expression
+
+```{r message=FALSE, fig.height=10, fig.width=10}
+# tiff("TARGET_AML_1031_AMLvsNBM_DEMirs.tiff", height = 10, width = 10, units = "in", res=200)
+
+DEMirs <- twoGroups_DEMirs(expnData = cts,
+                           clinData = CDE.1031, 
+                           col = "Group", 
+                           ref = "NBM", 
+                           RPM = FALSE, 
+                           BM = FALSE) #BM=FALSE because usually they are NOT in the CDEs and have to be appended to the phenovector inside the function. 
+# dev.off()
+saveRDS(DEMirs, "TARGET_AML_1031_AMLvsNBM_DEMirs.RDS")
+```
+
+
+```{r}
+dim(DEMirs$DE$Voom$E) #675 1134
+```
+
+```{r}
+table(DEMirs$phenovector)
+```
+
+
+```{r}
+DEMirs.df <- extract_DEMirs(DEMirs) %>%
+  separate(gene, c("miR","MIMAT"), remove = F, sep="\\.") %>%
+  select(ID=gene, everything())
+
+dim(DEMirs.df) #266   8
+quantile(DEMirs.df$logFC)
+head(DEMirs.df)
+```
+
+```{r}
+# write.csv(DEMirs.df, "TARGET_AML_1031_AMLvsNBM_DEMirs_9.26.18.csv", row.names = FALSE)
+```
+
+
+#Look at the Clustering
+
+```{r fig.height=8}
+pca.plot <- extract_PCA(DEMirs)
+
+# tiff("AML_vs_NBM_PCAplot.tiff", height = 8, width = 8, units="in", res=200)
+pca.plot
+# dev.off()
+```
+
+```{r fig.height=8}
+mds.plot <- extract_MDS(DEMirs)
+
+# tiff("AML_vs_NBM_MDSplot.tiff", height = 8, width = 8, units="in", res=200)
+mds.plot
+# dev.off()
+```
+
+
+
+
+
+#Create a Annotation Heatmap 
+
+
+```{r}
+source("~/scripts/RNAseq_Analysis/DifferentialExpn_PathwayAnalysis/Heatmaps_Function.r")
+```
+
+
+1)	Age Categories
+2)	Cyto Categories 1: inv(16), t(8;21), KMT2A, Normal Karyotype, other AMLs 
+3)	Cyto Categories 2: M6, M7, Del5Q/Monosomy5, Monosomy 7, OtherAMLs 
+4)	Rare.Fusions:  select those with N ≥ 10. This will be likely NUP98-NSD1, NUP98-KDM5A, CBF-GLIS, DEK.NUP214, and a few others. To Be Done after the finalized fusion data set. Can use Rare.Variants for now. Again feel free to modify. 
+5)	SNVs: 1031, NPM1, FLT3-ITD, KIT, OtherAMLs 
+
+
+```{r}
+CDE.1031.clean <- CDE.1031 %>%
+  mutate(NBM=ifelse(grepl("NBM", Group), "Yes", "No")) %>%
+  mutate(Patient.registration.number=ifelse(is.na(Patient.registration.number), USI, Patient.registration.number)) %>%
+  # select(USI,Patient.registration.number, M6_AML=M6_AML, M7_AML=M7_AML, everything()) %>%
+  mutate_at(vars(c("M6_AML", "M7_AML","del5q", 
+                   "monosomy.7","NPM.mutation.", "CEBPA.mutation.", 
+                   "FLT3.ITD.positive.","Primary.Cytogenetic.Code", "Age.Category")), funs(case_when(
+                                                                                              grepl("NBM", Group) ~ "NBM",
+                                                                                              is.na(.) | grepl("^$", .) ~ "Unknown",
+                                                                                              TRUE ~ .))) %>%
+  mutate_at(vars(matches("NSD1|KDM5A|DEK|GLIS2")), funs(case_when(
+                                                               grepl("NBM", Group) ~ "NBM",
+                                                               is.na(.) | grepl("^$", .) ~ "Unknown",
+                                                               TRUE ~ .))) %>%
+  
+  mutate(Cyto.Category2=pheno_bars(CDE = ., IDCol = "Patient.registration.number",
+                                   cols=c("M6_AML", "M7_AML","del5q", "monosomy.7")), 
+         Prevalent.Mutations=pheno_bars(CDE=., IDCol="Patient.registration.number", cols=c("NPM.mutation.", "CEBPA.mutation.", "FLT3.ITD.positive.")), 
+         Rare.Fusions=pheno_bars(CDE=., IDCol = "Patient.registration.number", cols=grep("NSD1|KDM5A|DEK|GLIS2",colnames(CDE.1031), value=TRUE)))
+
+
+```
+
+
+```{r}
+table(CDE.1031.clean$Cyto.Category2)
+table(CDE.1031.clean$Prevalent.Mutations)
+table(CDE.1031.clean$Rare.Fusions)
+```
+
+
+```{r}
+cols <- c("Age.Category",
+          "Primary.Cytogenetic.Code", 
+          "Cyto.Category2",
+          "Prevalent.Mutations", 
+          "Rare.Fusions")
+
+cc.all <- colorCodes_aheatmap(CDE.1031.clean[,cols])
+cc.all <- lapply(cc.all, function(x){ x["NBM"] <- "darkgrey"; x} )
+cc.all <- lapply(cc.all, function(x){ x["OtherAML"] <- "aliceblue"; x} )
+cc.all <- lapply(cc.all, function(x){ x["Other"] <- "aliceblue"; x} )
+cc.all <- lapply(cc.all, function(x){ x["Unknown"] <- "sienna4"; x} )
+```
+
+
+```{r}
+high.Mirs <- DEMirs.df %>%
+  filter(logFC > 1) %>%
+  filter(logFC >= quantile(logFC)[4])
+
+dim(high.Mirs)
+```
+
+
+```{r}
+# mirs <- c(grep("mir-155|mir-181|mir-10[abc]|mir-196",DEMirs.df$ID, value=TRUE), high.Mirs$ID)
+
+hmap.anno <- create_HA_Labs_Hmap(expn =  DEMirs$DE$Voom$E,
+                                 geneList = DEMirs.df$ID, 
+                                 cc=cc.all,
+                                 goi = high.Mirs$ID, 
+                                 CDE=CDE.1031.clean, 
+                                 cols=cols) 
+
+# hmap.anno$geneLabels
+# hmap.anno$annoColumn
+```
+
+
+```{r }
+cb.heatmap <- ComplexHmap(mat = DEMirs$DE$Voom$E[DEMirs.df$ID, ], 
+                          name="AAML1031 DEMirs: AML vs NBM", 
+                          hmap_anno_obj = hmap.anno$annoColumn)
+```
+
+```{r fig.height=10, fig.width=14}
+tiff("TARGET_AML_1031_AMLvsNBM_annoHeatmap.tiff", height = 10, width = 14, units="in", res=200)
+draw(cb.heatmap + hmap.anno$geneLabels, heatmap_legend_side="left", annotation_legend_side="right")
+dev.off()
+```
+
+
+
+
+#Session Information 
+
+```{r}
+sessionInfo()
+```
+
